@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>🐉 小龍黏黏手</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #1a1a2e;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+canvas {
+  display: block;
+  margin: 0 auto;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+//  🐉 小龍黏黏手 — Dragon Sticky Hand Game
+// ============================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// --- Responsive sizing (portrait mobile) ---
+let W, H, SCALE;
+function resize() {
+  const aspect = 9 / 16;
+  if (window.innerWidth / window.innerHeight < aspect) {
+    W = window.innerWidth;
+    H = W / aspect;
+  } else {
+    H = window.innerHeight;
+    W = H * aspect;
+  }
+  W = Math.floor(W);
+  H = Math.floor(H);
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  SCALE = W / 400; // design at 400 logical width
+}
+resize();
+window.addEventListener('resize', resize);
+
+// --- Constants ---
+const GRAVITY = 980;
+const TRAMPOLINE_BOUNCE = 650;
+const STICKY_SPEED = 600;
+const SWING_BUILDUP = 2.5; // how fast swing amplitude grows
+const SWING_MAX_ANGLE = 1.2; // max swing angle in radians
+
+// --- Game State ---
+let state = 'title'; // title, walking, trampoline, aiming, shooting, stuck, swinging, flying, win, reset
+let level = 0;
+let dragonX, dragonY, dragonVX, dragonVY;
+let dragonAngle = 0;
+let walkDir = -1; // -1 = moving left
+let trampolineHoldTime = 0;
+let trampolinePressed = false;
+
+// Sticky hand
+let stickyStartX, stickyStartY;
+let stickyEndX, stickyEndY;
+let stickyDirX, stickyDirY;
+let stickyAttached = false;
+let stickyWiggleTime = 0;
+let stickyLength = 0;
+let ropeLength = 0;
+
+// Swing
+let swingAngle = 0;
+let swingVel = 0;
+let swingHoldTime = 0;
+let swingActive = false;
+let fingerDown = false;
+let fingerX = 0, fingerY = 0;
+
+// Aiming
+let aimStartX, aimStartY, aimEndX, aimEndY;
+let isAiming = false;
+
+// Dragon properties
+const DRAGON_R = 15;
+
+// Animation
+let lastTime = 0;
+let animTime = 0;
+
+// Particles
+let particles = [];
+
+// --- Level Definitions ---
+const levels = [
+  { // Level 1 - simple
+    walls: [
+      { x: 0, y: 0, w: 10, h: 1 },      // left wall (normalized)
+      { x: 0, y: 0, w: 1, h: 0.08 },     // ceiling
+      { x: 0.9, y: 0, w: 0.1, h: 1 },    // right wall
+    ],
+    obstacles: [],
+    fruit: { x: 0.82, y: 0.35 },
+    trampolineX: 0.12,
+  },
+  { // Level 2 - wall from ceiling
+    walls: [
+      { x: 0, y: 0, w: 0.025, h: 1 },
+      { x: 0, y: 0, w: 1, h: 0.02 },
+      { x: 0.92, y: 0, w: 0.08, h: 1 },
+    ],
+    obstacles: [
+      { x: 0.45, y: 0, w: 0.05, h: 0.55 }, // wall hanging from ceiling
+    ],
+    fruit: { x: 0.82, y: 0.3 },
+    trampolineX: 0.12,
+  },
+  { // Level 3 - two obstacles
+    walls: [
+      { x: 0, y: 0, w: 0.025, h: 1 },
+      { x: 0, y: 0, w: 1, h: 0.02 },
+      { x: 0.92, y: 0, w: 0.08, h: 1 },
+    ],
+    obstacles: [
+      { x: 0.35, y: 0, w: 0.04, h: 0.45 },
+      { x: 0.6, y: 0.55, w: 0.04, h: 0.45 },
+    ],
+    fruit: { x: 0.82, y: 0.25 },
+    trampolineX: 0.12,
+  },
+  { // Level 4 - narrow gap
+    walls: [
+      { x: 0, y: 0, w: 0.025, h: 1 },
+      { x: 0, y: 0, w: 1, h: 0.02 },
+      { x: 0.92, y: 0, w: 0.08, h: 1 },
+    ],
+    obstacles: [
+      { x: 0.3, y: 0, w: 0.04, h: 0.5 },
+      { x: 0.55, y: 0, w: 0.04, h: 0.35 },
+      { x: 0.55, y: 0.55, w: 0.04, h: 0.45 },
+    ],
+    fruit: { x: 0.82, y: 0.42 },
+    trampolineX: 0.12,
+  },
+  { // Level 5 - maze-like
+    walls: [
+      { x: 0, y: 0, w: 0.025, h: 1 },
+      { x: 0, y: 0, w: 1, h: 0.02 },
+      { x: 0.92, y: 0, w: 0.08, h: 1 },
+    ],
+    obstacles: [
+      { x: 0.25, y: 0.45, w: 0.04, h: 0.55 },
+      { x: 0.45, y: 0, w: 0.04, h: 0.55 },
+      { x: 0.65, y: 0.4, w: 0.04, h: 0.6 },
+    ],
+    fruit: { x: 0.82, y: 0.2 },
+    trampolineX: 0.12,
+  },
+];
+
+// --- Convert level coords to pixels ---
+function lx(n) { return n * W; }
+function ly(n) { return n * H; }
+
+function getLevelWalls() {
+  const lv = levels[level];
+  const all = [...lv.walls, ...lv.obstacles];
+  return all.map(w => ({
+    x: lx(w.x), y: ly(w.y), w: lx(w.w), h: ly(w.h), isObstacle: lv.obstacles.includes(w)
+  }));
+}
+
+function getFruit() {
+  const lv = levels[level];
+  return { x: lx(lv.fruit.x), y: ly(lv.fruit.y), r: 18 * SCALE };
+}
+
+function getTrampolineX() {
+  return lx(levels[level].trampolineX);
+}
+
+// --- Init Level ---
+function initLevel() {
+  const tx = getTrampolineX();
+  dragonX = W * 0.85;
+  dragonY = H * 0.88;
+  dragonVX = 0;
+  dragonVY = 0;
+  dragonAngle = 0;
+  walkDir = -1;
+  state = 'walking';
+  stickyAttached = false;
+  swingActive = false;
+  fingerDown = false;
+  isAiming = false;
+  trampolinePressed = false;
+  trampolineHoldTime = 0;
+  particles = [];
+}
+
+// --- Trampoline ---
+const TRAMP_W = 60;
+const TRAMP_H = 20;
+function getTrampolineBounds() {
+  const tx = getTrampolineX();
+  return {
+    x: tx - TRAMP_W / 2 * SCALE,
+    y: H * 0.92 - TRAMP_H * SCALE,
+    w: TRAMP_W * SCALE,
+    h: TRAMP_H * SCALE,
+    cx: tx,
+    cy: H * 0.92 - TRAMP_H * SCALE
+  };
+}
+
+// --- Drawing Helpers ---
+function drawRoundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// --- Draw Dragon ---
+function drawDragon(x, y, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle || 0);
+  const s = SCALE;
+
+  // Body
+  ctx.fillStyle = '#4ecdc4';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 16 * s, 12 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#2a9d8f';
+  ctx.lineWidth = 1.5 * s;
+  ctx.stroke();
+
+  // Belly
+  ctx.fillStyle = '#a8edea';
+  ctx.beginPath();
+  ctx.ellipse(2 * s, 3 * s, 9 * s, 7 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#4ecdc4';
+  ctx.beginPath();
+  ctx.ellipse(-14 * s, -6 * s, 10 * s, 8 * s, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#2a9d8f';
+  ctx.stroke();
+
+  // Eye
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(-17 * s, -9 * s, 4 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.arc(-18 * s, -9 * s, 2 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = '#2a9d8f';
+  ctx.lineWidth = 1 * s;
+  ctx.beginPath();
+  ctx.arc(-14 * s, -4 * s, 4 * s, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+
+  // Horns
+  ctx.fillStyle = '#f9c74f';
+  ctx.beginPath();
+  ctx.moveTo(-10 * s, -14 * s);
+  ctx.lineTo(-7 * s, -22 * s);
+  ctx.lineTo(-5 * s, -13 * s);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-15 * s, -13 * s);
+  ctx.lineTo(-14 * s, -21 * s);
+  ctx.lineTo(-11 * s, -13 * s);
+  ctx.fill();
+
+  // Wings
+  ctx.fillStyle = 'rgba(78, 205, 196, 0.5)';
+  ctx.beginPath();
+  ctx.moveTo(2 * s, -8 * s);
+  ctx.quadraticCurveTo(12 * s, -25 * s, 22 * s, -8 * s);
+  ctx.quadraticCurveTo(14 * s, -5 * s, 2 * s, -8 * s);
+  ctx.fill();
+  ctx.strokeStyle = '#2a9d8f';
+  ctx.lineWidth = 1 * s;
+  ctx.stroke();
+
+  // Tail
+  ctx.strokeStyle = '#4ecdc4';
+  ctx.lineWidth = 3 * s;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(16 * s, 0);
+  ctx.quadraticCurveTo(25 * s, -5 * s, 28 * s, 5 * s);
+  ctx.quadraticCurveTo(30 * s, 12 * s, 25 * s, 8 * s);
+  ctx.stroke();
+
+  // Legs
+  ctx.fillStyle = '#4ecdc4';
+  // Front legs
+  ctx.fillRect(-8 * s, 10 * s, 4 * s, 6 * s);
+  ctx.fillRect(-2 * s, 10 * s, 4 * s, 6 * s);
+  // Feet
+  ctx.fillStyle = '#f9c74f';
+  ctx.fillRect(-9 * s, 15 * s, 6 * s, 3 * s);
+  ctx.fillRect(-3 * s, 15 * s, 6 * s, 3 * s);
+
+  ctx.restore();
+}
+
+// --- Draw Trampoline ---
+function drawTrampoline(squish) {
+  const tb = getTrampolineBounds();
+  const s = SCALE;
+  const sq = squish || 0; // 0-1
+
+  ctx.save();
+
+  // Legs
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 3 * s;
+  ctx.beginPath();
+  ctx.moveTo(tb.x + 8 * s, tb.y + tb.h);
+  ctx.lineTo(tb.x + 2 * s, tb.y + tb.h + 25 * s + sq * 10 * s);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tb.x + tb.w - 8 * s, tb.y + tb.h);
+  ctx.lineTo(tb.x + tb.w - 2 * s, tb.y + tb.h + 25 * s + sq * 10 * s);
+  ctx.stroke();
+
+  // Web/net surface
+  const webY = tb.y + sq * 15 * s;
+  ctx.fillStyle = `rgba(200, 200, 255, ${0.3 + sq * 0.2})`;
+  ctx.strokeStyle = '#aaf';
+  ctx.lineWidth = 2 * s;
+  ctx.beginPath();
+  ctx.ellipse(tb.x + tb.w / 2, webY + tb.h / 2, tb.w / 2, tb.h / 2 + sq * 8 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Web lines
+  ctx.strokeStyle = 'rgba(170, 170, 255, 0.6)';
+  ctx.lineWidth = 1 * s;
+  const cx = tb.x + tb.w / 2;
+  const cy = webY + tb.h / 2;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a) * tb.w / 2, cy + Math.sin(a) * (tb.h / 2 + sq * 8 * s));
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// --- Draw Sticky Hand ---
+function drawStickyHand(fromX, fromY, toX, toY, wiggle) {
+  ctx.save();
+  const s = SCALE;
+
+  // Rope with wiggle
+  ctx.strokeStyle = '#ff6b9d';
+  ctx.lineWidth = 3 * s;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+
+  if (wiggle > 0) {
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const nx = -dy / len;
+    const ny = dx / len;
+    const segs = 12;
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs;
+      const px = fromX + dx * t;
+      const py = fromY + dy * t;
+      const wave = Math.sin(t * Math.PI * 4 + wiggle * 8) * 8 * s * (1 - t) * Math.min(wiggle, 1);
+      ctx.lineTo(px + nx * wave, py + ny * wave);
+    }
+  } else {
+    ctx.lineTo(toX, toY);
+  }
+  ctx.stroke();
+
+  // Sticky hand (the end)
+  ctx.fillStyle = '#ff6b9d';
+  ctx.beginPath();
+  ctx.arc(toX, toY, 6 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#d4547a';
+  ctx.lineWidth = 1.5 * s;
+  ctx.stroke();
+
+  // Fingers on sticky hand
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI - Math.PI / 4;
+    ctx.fillStyle = '#ff85ad';
+    ctx.beginPath();
+    ctx.arc(toX + Math.cos(a) * 5 * s, toY + Math.sin(a) * 5 * s, 2.5 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// --- Draw Fruit ---
+function drawFruit(x, y, r) {
+  ctx.save();
+  const s = SCALE;
+
+  // Apple
+  ctx.fillStyle = '#e63946';
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#c1121f';
+  ctx.lineWidth = 1.5 * s;
+  ctx.stroke();
+
+  // Shine
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.arc(x - r * 0.3, y - r * 0.3, r * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stem
+  ctx.strokeStyle = '#6b4226';
+  ctx.lineWidth = 2 * s;
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.quadraticCurveTo(x + 3 * s, y - r - 6 * s, x + 1 * s, y - r - 8 * s);
+  ctx.stroke();
+
+  // Leaf
+  ctx.fillStyle = '#52b788';
+  ctx.beginPath();
+  ctx.ellipse(x + 4 * s, y - r - 4 * s, 5 * s, 2.5 * s, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// --- Draw Walls ---
+function drawWalls() {
+  const walls = getLevelWalls();
+  walls.forEach(w => {
+    if (w.isObstacle) {
+      // Obstacle: darker, with texture
+      ctx.fillStyle = '#5c677d';
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      ctx.strokeStyle = '#415a77';
+      ctx.lineWidth = 2 * SCALE;
+      ctx.strokeRect(w.x, w.y, w.w, w.h);
+      // Brick pattern
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      const brickH = 12 * SCALE;
+      for (let by = w.y; by < w.y + w.h; by += brickH) {
+        ctx.beginPath();
+        ctx.moveTo(w.x, by);
+        ctx.lineTo(w.x + w.w, by);
+        ctx.stroke();
+      }
+    } else {
+      // Main walls
+      ctx.fillStyle = '#3a506b';
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      ctx.strokeStyle = '#2b3a4e';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(w.x, w.y, w.w, w.h);
+    }
+  });
+}
+
+// --- Draw Background ---
+function drawBackground() {
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0f0c29');
+  grad.addColorStop(0.5, '#302b63');
+  grad.addColorStop(1, '#24243e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i = 0; i < 30; i++) {
+    const sx = ((i * 137 + 50) % W);
+    const sy = ((i * 97 + 30) % (H * 0.5));
+    const sr = (i % 3 === 0) ? 1.5 : 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr * SCALE, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Ground
+  ctx.fillStyle = '#2d6a4f';
+  ctx.fillRect(0, H * 0.93, W, H * 0.07);
+  ctx.fillStyle = '#40916c';
+  ctx.fillRect(0, H * 0.93, W, 3 * SCALE);
+}
+
+// --- Particles ---
+function addParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 200,
+      vy: (Math.random() - 0.5) * 200 - 100,
+      life: 1,
+      color,
+      r: (Math.random() * 3 + 1) * SCALE
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 300 * dt;
+    p.life -= dt * 1.5;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+// --- Collision ---
+function rectContains(r, px, py, pr) {
+  return px + pr > r.x && px - pr < r.x + r.w && py + pr > r.y && py - pr < r.y + r.h;
+}
+
+function circleCircle(x1, y1, r1, x2, y2, r2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy) < r1 + r2;
+}
+
+// Find first wall hit along a line
+function raycastWalls(x1, y1, x2, y2) {
+  const walls = getLevelWalls();
+  let best = null, bestT = Infinity;
+
+  const dx = x2 - x1, dy = y2 - y1;
+
+  walls.forEach(w => {
+    // Check all 4 edges
+    const edges = [
+      [w.x, w.y, w.x + w.w, w.y],           // top
+      [w.x, w.y + w.h, w.x + w.w, w.y + w.h], // bottom
+      [w.x, w.y, w.x, w.y + w.h],            // left
+      [w.x + w.w, w.y, w.x + w.w, w.y + w.h]  // right
+    ];
+
+    edges.forEach(([ex1, ey1, ex2, ey2]) => {
+      const dex = ex2 - ex1, dey = ey2 - ey1;
+      const denom = dx * dey - dy * dex;
+      if (Math.abs(denom) < 0.001) return;
+
+      const t = ((ex1 - x1) * dey - (ey1 - y1) * dex) / denom;
+      const u = ((ex1 - x1) * dy - (ey1 - y1) * dx) / denom;
+
+      if (t >= 0 && t <= 1 && u >= 0 && u <= 1 && t < bestT) {
+        bestT = t;
+        best = { x: x1 + dx * t, y: y1 + dy * t, wall: w };
+      }
+    });
+  });
+
+  return best;
+}
+
+// --- Touch Handling ---
+let touchId = null;
+
+function getTouchPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.changedTouches ? e.changedTouches[0] : e;
+  return {
+    x: touch.clientX - rect.left,
+    y: touch.clientY - rect.top
+  };
+}
+
+canvas.addEventListener('touchstart', onDown, { passive: false });
+canvas.addEventListener('mousedown', onDown);
+canvas.addEventListener('touchmove', onMove, { passive: false });
+canvas.addEventListener('mousemove', onMove);
+canvas.addEventListener('touchend', onUp);
+canvas.addEventListener('mouseup', onUp);
+
+function onDown(e) {
+  e.preventDefault();
+  const pos = getTouchPos(e);
+  fingerDown = true;
+  fingerX = pos.x;
+  fingerY = pos.y;
+
+  if (state === 'title') {
+    level = 0;
+    initLevel();
+    return;
+  }
+
+  if (state === 'win') {
+    level++;
+    if (level >= levels.length) {
+      state = 'complete';
+    } else {
+      initLevel();
+    }
+    return;
+  }
+
+  if (state === 'complete') {
+    level = 0;
+    state = 'title';
+    return;
+  }
+
+  if (state === 'walking') {
+    // Check if touching trampoline area (dragon should be on trampoline)
+    return;
+  }
+
+  if (state === 'trampoline') {
+    trampolinePressed = true;
+    trampolineHoldTime = 0;
+    return;
+  }
+
+  if (state === 'aiming') {
+    // Start aiming from dragon
+    const dr = DRAGON_R * SCALE;
+    const dist = Math.sqrt((pos.x - dragonX) ** 2 + (pos.y - dragonY) ** 2);
+    if (dist < dr * 4) {
+      isAiming = true;
+      aimStartX = dragonX;
+      aimStartY = dragonY;
+      aimEndX = pos.x;
+      aimEndY = pos.y;
+    }
+    return;
+  }
+
+  if (state === 'stuck') {
+    // Start swinging by holding
+    swingHoldTime = 0;
+    swingActive = false;
+    return;
+  }
+}
+
+function onMove(e) {
+  e.preventDefault();
+  const pos = getTouchPos(e);
+  fingerX = pos.x;
+  fingerY = pos.y;
+
+  if (isAiming && state === 'aiming') {
+    aimEndX = pos.x;
+    aimEndY = pos.y;
+  }
+}
+
+function onUp(e) {
+  e.preventDefault();
+  const pos = getTouchPos(e);
+  fingerDown = false;
+
+  if (state === 'trampoline' && trampolinePressed) {
+    trampolinePressed = false;
+    // Launch dragon
+    const power = Math.min(trampolineHoldTime / 1.2, 1); // 0-1 over ~1.2s
+    dragonVX = 30 * SCALE;
+    dragonVY = -(TRAMPOLINE_BOUNCE + power * 300) * SCALE;
+    state = 'aiming';
+    addParticles(dragonX, dragonY + 10 * SCALE, '#aaf', 8);
+    return;
+  }
+
+  if (isAiming && state === 'aiming') {
+    isAiming = false;
+    // Calculate direction from dragon to finger drag endpoint
+    const dx = aimEndX - aimStartX;
+    const dy = aimEndY - aimStartY;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > 10 * SCALE) {
+      stickyDirX = dx / len;
+      stickyDirY = dy / len;
+      stickyStartX = dragonX;
+      stickyStartY = dragonY;
+      stickyEndX = dragonX;
+      stickyEndY = dragonY;
+      stickyWiggleTime = 0;
+      stickyAttached = false;
+      state = 'shooting';
+    }
+    return;
+  }
+
+  if (state === 'swinging' || state === 'stuck') {
+    // Release! Dragon flies off with inertia
+    if (swingActive) {
+      // Calculate velocity from swing
+      const dx = dragonX - stickyEndX;
+      const dy = dragonY - stickyEndY;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      // Tangential velocity
+      const tangentX = -dy / len;
+      const tangentY = dx / len;
+      const speed = swingVel * len;
+      dragonVX = tangentX * speed;
+      dragonVY = tangentY * speed;
+      state = 'flying';
+    } else {
+      // Just let go without swinging, drop
+      dragonVX = 0;
+      dragonVY = 0;
+      state = 'flying';
+    }
+    stickyAttached = false;
+    return;
+  }
+}
+
+// --- Update ---
+function update(dt) {
+  animTime += dt;
+
+  if (state === 'walking') {
+    dragonX += walkDir * 80 * SCALE * dt;
+    // Walk animation bobble
+    dragonY = H * 0.88 + Math.sin(animTime * 8) * 2 * SCALE;
+
+    const tb = getTrampolineBounds();
+    if (dragonX <= tb.cx) {
+      dragonX = tb.cx;
+      state = 'trampoline';
+    }
+  }
+
+  if (state === 'trampoline') {
+    dragonX = getTrampolineBounds().cx;
+    dragonY = getTrampolineBounds().cy - 5 * SCALE;
+    if (trampolinePressed) {
+      trampolineHoldTime += dt;
+    }
+  }
+
+  if (state === 'aiming') {
+    // Dragon in freefall while aiming
+    dragonVY += GRAVITY * SCALE * dt;
+    dragonX += dragonVX * dt;
+    dragonY += dragonVY * dt;
+
+    // Check if dragon fell below screen
+    if (dragonY > H + 50) {
+      initLevel();
+    }
+  }
+
+  if (state === 'shooting') {
+    // Move sticky hand toward target
+    stickyWiggleTime += dt;
+    stickyEndX += stickyDirX * STICKY_SPEED * SCALE * dt;
+    stickyEndY += stickyDirY * STICKY_SPEED * SCALE * dt;
+
+    // Dragon keeps falling
+    dragonVY += GRAVITY * SCALE * dt;
+    dragonX += dragonVX * dt;
+    dragonY += dragonVY * dt;
+
+    // Check if sticky hand hit a wall
+    const walls = getLevelWalls();
+    for (const w of walls) {
+      if (stickyEndX > w.x && stickyEndX < w.x + w.w &&
+          stickyEndY > w.y && stickyEndY < w.y + w.h) {
+        stickyAttached = true;
+        // Clamp to wall surface
+        state = 'stuck';
+        swingHoldTime = 0;
+        swingActive = false;
+        // Calculate rope length
+        const rdx = dragonX - stickyEndX;
+        const rdy = dragonY - stickyEndY;
+        ropeLength = Math.sqrt(rdx * rdx + rdy * rdy);
+        swingAngle = Math.atan2(rdx, rdy);
+        swingVel = 0;
+        dragonVX = 0;
+        dragonVY = 0;
+        addParticles(stickyEndX, stickyEndY, '#ff6b9d', 6);
+        break;
+      }
+    }
+
+    // Off screen
+    if (stickyEndX < -50 || stickyEndX > W + 50 || stickyEndY < -50 || stickyEndY > H + 50) {
+      state = 'aiming';
+    }
+    if (dragonY > H + 50) {
+      initLevel();
+    }
+  }
+
+  if (state === 'stuck') {
+    if (fingerDown) {
+      swingHoldTime += dt;
+      if (swingHoldTime >= 2.0) {
+        // Start swinging
+        state = 'swinging';
+        swingActive = true;
+        swingVel = SWING_BUILDUP * 0.5;
+      }
+    }
+    // Dragon hangs
+    dragonX = stickyEndX + Math.sin(swingAngle) * ropeLength;
+    dragonY = stickyEndY + Math.cos(swingAngle) * ropeLength;
+  }
+
+  if (state === 'swinging') {
+    // Pendulum physics
+    const g = GRAVITY * SCALE;
+    const angularAccel = -(g / ropeLength) * Math.sin(swingAngle);
+    swingVel += angularAccel * dt;
+    swingVel *= 0.998; // tiny damping
+
+    // Build up amplitude over time
+    if (fingerDown) {
+      // Auto-drive the swing to build amplitude
+      if (swingAngle * swingVel > 0) {
+        swingVel += Math.sign(swingVel) * SWING_BUILDUP * dt;
+      }
+    }
+
+    swingAngle += swingVel * dt;
+
+    // Clamp
+    if (swingAngle > SWING_MAX_ANGLE) { swingAngle = SWING_MAX_ANGLE; swingVel *= -0.5; }
+    if (swingAngle < -SWING_MAX_ANGLE) { swingAngle = -SWING_MAX_ANGLE; swingVel *= -0.5; }
+
+    dragonX = stickyEndX + Math.sin(swingAngle) * ropeLength;
+    dragonY = stickyEndY + Math.cos(swingAngle) * ropeLength;
+    dragonAngle = swingAngle * 0.3;
+  }
+
+  if (state === 'flying') {
+    dragonVY += GRAVITY * SCALE * dt;
+    dragonX += dragonVX * dt;
+    dragonY += dragonVY * dt;
+    dragonAngle = Math.atan2(dragonVX, -dragonVY) * 0.2;
+
+    // Check fruit collision
+    const fruit = getFruit();
+    if (circleCircle(dragonX, dragonY, DRAGON_R * SCALE, fruit.x, fruit.y, fruit.r)) {
+      state = 'win';
+      addParticles(fruit.x, fruit.y, '#f9c74f', 20);
+      addParticles(fruit.x, fruit.y, '#e63946', 15);
+    }
+
+    // Check wall collision (bounce off or stop)
+    const walls = getLevelWalls();
+    for (const w of walls) {
+      if (rectContains(w, dragonX, dragonY, DRAGON_R * SCALE * 0.5)) {
+        // Hit wall, reset
+        initLevel();
+        return;
+      }
+    }
+
+    // Below screen
+    if (dragonY > H + 50) {
+      initLevel();
+    }
+  }
+
+  updateParticles(dt);
+}
+
+// --- Draw ---
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+
+  if (state === 'title') {
+    drawTitle();
+    return;
+  }
+
+  if (state === 'complete') {
+    drawComplete();
+    return;
+  }
+
+  drawWalls();
+
+  // Trampoline
+  const squish = (state === 'trampoline' && trampolinePressed) ? Math.min(trampolineHoldTime / 1.2, 1) : 0;
+  drawTrampoline(squish);
+
+  // Fruit
+  const fruit = getFruit();
+  const fruitBob = Math.sin(animTime * 3) * 3 * SCALE;
+  if (state !== 'win') {
+    drawFruit(fruit.x, fruit.y + fruitBob, fruit.r);
+  }
+
+  // Sticky hand
+  if (state === 'shooting' || state === 'stuck' || state === 'swinging') {
+    drawStickyHand(dragonX, dragonY, stickyEndX, stickyEndY,
+      state === 'shooting' ? stickyWiggleTime : 0);
+  }
+
+  // Aim line
+  if (isAiming && state === 'aiming') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 107, 157, 0.5)';
+    ctx.lineWidth = 2 * SCALE;
+    ctx.setLineDash([5 * SCALE, 5 * SCALE]);
+    ctx.beginPath();
+    ctx.moveTo(aimStartX, aimStartY);
+    const dx = aimEndX - aimStartX;
+    const dy = aimEndY - aimStartY;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    ctx.lineTo(aimStartX + dx / len * 100 * SCALE, aimStartY + dy / len * 100 * SCALE);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Dragon
+  drawDragon(dragonX, dragonY, dragonAngle);
+
+  // Particles
+  drawParticles();
+
+  // UI
+  drawUI();
+
+  // Win overlay
+  if (state === 'win') {
+    drawWinOverlay();
+  }
+}
+
+function drawTitle() {
+  drawBackground();
+  ctx.save();
+  const s = SCALE;
+
+  // Title
+  ctx.fillStyle = '#f9c74f';
+  ctx.font = `bold ${32 * s}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('🐉 小龍黏黏手', W / 2, H * 0.3);
+
+  ctx.fillStyle = '#a8edea';
+  ctx.font = `${16 * s}px sans-serif`;
+  ctx.fillText('Dragon Sticky Hand', W / 2, H * 0.37);
+
+  // Dragon
+  drawDragon(W / 2, H * 0.52, Math.sin(animTime * 2) * 0.1);
+
+  // Tap to start
+  ctx.globalAlpha = 0.5 + Math.sin(animTime * 3) * 0.5;
+  ctx.fillStyle = 'white';
+  ctx.font = `${18 * s}px sans-serif`;
+  ctx.fillText('點擊開始遊戲', W / 2, H * 0.72);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+function drawUI() {
+  ctx.save();
+  const s = SCALE;
+
+  // Level indicator
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  drawRoundRect(W / 2 - 40 * s, 8 * s, 80 * s, 24 * s, 12 * s);
+  ctx.fill();
+  ctx.fillStyle = '#f9c74f';
+  ctx.font = `bold ${14 * s}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`Level ${level + 1}`, W / 2, 25 * s);
+
+  // State hints
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${11 * s}px sans-serif`;
+  ctx.textAlign = 'center';
+
+  if (state === 'trampoline' && !trampolinePressed) {
+    ctx.fillText('按住螢幕蓄力 → 放開彈射！', W / 2, H - 20 * s);
+  } else if (state === 'trampoline' && trampolinePressed) {
+    const pct = Math.min(trampolineHoldTime / 1.2 * 100, 100).toFixed(0);
+    ctx.fillText(`蓄力中... ${pct}%`, W / 2, H - 20 * s);
+  } else if (state === 'aiming') {
+    ctx.fillText('點住小龍 → 拖出方向 → 放開射出', W / 2, H - 20 * s);
+  } else if (state === 'stuck') {
+    const remain = Math.max(0, 2.0 - swingHoldTime).toFixed(1);
+    if (fingerDown) {
+      ctx.fillText(`按住中... ${remain}s 後開始擺盪`, W / 2, H - 20 * s);
+    } else {
+      ctx.fillText('按住螢幕不放，等待擺盪', W / 2, H - 20 * s);
+    }
+  } else if (state === 'swinging') {
+    ctx.fillText('放開手指 → 小龍飛出去！', W / 2, H - 20 * s);
+  }
+
+  ctx.restore();
+}
+
+function drawWinOverlay() {
+  ctx.save();
+  const s = SCALE;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#f9c74f';
+  ctx.font = `bold ${36 * s}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('🎉 過關！', W / 2, H * 0.4);
+
+  ctx.fillStyle = 'white';
+  ctx.font = `${16 * s}px sans-serif`;
+  ctx.fillText(`Level ${level + 1} 完成！`, W / 2, H * 0.48);
+
+  ctx.globalAlpha = 0.5 + Math.sin(animTime * 3) * 0.5;
+  ctx.fillText('點擊繼續', W / 2, H * 0.58);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+function drawComplete() {
+  drawBackground();
+  ctx.save();
+  const s = SCALE;
+
+  ctx.fillStyle = '#f9c74f';
+  ctx.font = `bold ${30 * s}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('🏆 全部過關！', W / 2, H * 0.35);
+
+  ctx.fillStyle = '#a8edea';
+  ctx.font = `${16 * s}px sans-serif`;
+  ctx.fillText('你太厲害了！', W / 2, H * 0.43);
+
+  drawDragon(W / 2, H * 0.55, Math.sin(animTime * 2) * 0.15);
+
+  ctx.globalAlpha = 0.5 + Math.sin(animTime * 3) * 0.5;
+  ctx.fillStyle = 'white';
+  ctx.font = `${14 * s}px sans-serif`;
+  ctx.fillText('點擊回到標題', W / 2, H * 0.72);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+// --- Game Loop ---
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+lastTime = performance.now();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
