@@ -99,6 +99,9 @@ let animTime = 0;
 // Particles
 let particles = [];
 
+// Flight trail
+let trail = [];
+
 // --- Level Definitions ---
 const levels = [
   { // Level 1 - simple
@@ -204,6 +207,7 @@ function initLevel() {
   trampolinePressed = false;
   trampolineHoldTime = 0;
   particles = [];
+  trail = [];
 }
 
 // --- Trampoline ---
@@ -665,16 +669,12 @@ function onDown(e) {
   }
 
   if (state === 'aiming') {
-    // Start aiming from dragon
-    const dr = DRAGON_R * SCALE;
-    const dist = Math.sqrt((pos.x - dragonX) ** 2 + (pos.y - dragonY) ** 2);
-    if (dist < dr * 4) {
-      isAiming = true;
-      aimStartX = dragonX;
-      aimStartY = dragonY;
-      aimEndX = pos.x;
-      aimEndY = pos.y;
-    }
+    // Start aiming from anywhere — no need to tap the dragon
+    isAiming = true;
+    aimStartX = pos.x;
+    aimStartY = pos.y;
+    aimEndX = pos.x;
+    aimEndY = pos.y;
     return;
   }
 
@@ -705,10 +705,10 @@ function onUp(e) {
 
   if (state === 'trampoline' && trampolinePressed) {
     trampolinePressed = false;
-    // Launch dragon
+    // Launch dragon — slower so player has more time to aim
     const power = Math.min(trampolineHoldTime / 1.2, 1); // 0-1 over ~1.2s
-    dragonVX = 30 * SCALE;
-    dragonVY = -(TRAMPOLINE_BOUNCE + power * 300) * SCALE;
+    dragonVX = 20 * SCALE;
+    dragonVY = -(TRAMPOLINE_BOUNCE + power * 200) * SCALE;
     state = 'aiming';
     addParticles(dragonX, dragonY + 10 * SCALE, '#aaf', 8);
     return;
@@ -716,11 +716,11 @@ function onUp(e) {
 
   if (isAiming && state === 'aiming') {
     isAiming = false;
-    // Calculate direction from dragon to finger drag endpoint
+    // Calculate direction from drag start to drag end
     const dx = aimEndX - aimStartX;
     const dy = aimEndY - aimStartY;
     const len = Math.sqrt(dx * dx + dy * dy);
-    if (len > 10 * SCALE) {
+    if (len > 8 * SCALE) {
       stickyDirX = dx / len;
       stickyDirY = dy / len;
       stickyStartX = dragonX;
@@ -729,6 +729,9 @@ function onUp(e) {
       stickyEndY = dragonY;
       stickyWiggleTime = 0;
       stickyAttached = false;
+      // Freeze dragon velocity while shooting
+      dragonVX *= 0.3;
+      dragonVY *= 0.3;
       state = 'shooting';
     }
     return;
@@ -784,8 +787,8 @@ function update(dt) {
   }
 
   if (state === 'aiming') {
-    // Dragon in freefall while aiming
-    dragonVY += GRAVITY * SCALE * dt;
+    // Dragon in slow-mo freefall while aiming — gives more time
+    dragonVY += GRAVITY * SCALE * dt * 0.4;
     dragonX += dragonVX * dt;
     dragonY += dragonVY * dt;
 
@@ -816,10 +819,10 @@ function update(dt) {
         state = 'stuck';
         swingHoldTime = 0;
         swingActive = false;
-        // Calculate rope length
+        // Calculate rope length — ensure a minimum length so swing is visible
         const rdx = dragonX - stickyEndX;
         const rdy = dragonY - stickyEndY;
-        ropeLength = Math.sqrt(rdx * rdx + rdy * rdy);
+        ropeLength = Math.max(Math.sqrt(rdx * rdx + rdy * rdy), H * 0.25);
         swingAngle = Math.atan2(rdx, rdy);
         swingVel = 0;
         dragonVX = 0;
@@ -883,28 +886,48 @@ function update(dt) {
     dragonVY += GRAVITY * SCALE * dt;
     dragonX += dragonVX * dt;
     dragonY += dragonVY * dt;
-    dragonAngle = Math.atan2(dragonVX, -dragonVY) * 0.2;
+    dragonAngle = Math.atan2(dragonVX, -dragonVY) * 0.3;
+
+    // Add trail point
+    trail.push({ x: dragonX, y: dragonY, life: 1.0 });
+    if (trail.length > 40) trail.shift();
 
     // Check fruit collision
     const fruit = getFruit();
     if (circleCircle(dragonX, dragonY, DRAGON_R * SCALE, fruit.x, fruit.y, fruit.r)) {
       state = 'win';
+      trail = [];
       addParticles(fruit.x, fruit.y, '#f9c74f', 20);
       addParticles(fruit.x, fruit.y, '#e63946', 15);
     }
 
-    // Check wall collision (bounce off or stop)
+    // Check wall collision — bounce off instead of instant reset
     const walls = getLevelWalls();
     for (const w of walls) {
       if (rectContains(w, dragonX, dragonY, DRAGON_R * SCALE * 0.5)) {
-        // Hit wall, reset
-        initLevel();
-        return;
+        // Bounce off wall
+        const cx = w.x + w.w / 2;
+        const cy = w.y + w.h / 2;
+        if (Math.abs(dragonX - cx) / w.w > Math.abs(dragonY - cy) / w.h) {
+          dragonVX *= -0.4;
+          dragonX += Math.sign(dragonX - cx) * 3;
+        } else {
+          dragonVY *= -0.4;
+          dragonY += Math.sign(dragonY - cy) * 3;
+        }
+        addParticles(dragonX, dragonY, '#aaa', 3);
+        break;
       }
     }
 
-    // Below screen
-    if (dragonY > H + 50) {
+    // Hit ground = fail
+    if (dragonY > H * 0.93) {
+      trail = [];
+      initLevel();
+    }
+    // Off screen sides
+    if (dragonX < -80 || dragonX > W + 80 || dragonY < -200) {
+      trail = [];
       initLevel();
     }
   }
@@ -960,6 +983,22 @@ function draw() {
     ctx.lineTo(aimStartX + dx / len * 100 * SCALE, aimStartY + dy / len * 100 * SCALE);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Flight trail
+  if (state === 'flying' && trail.length > 1) {
+    ctx.save();
+    for (let i = 1; i < trail.length; i++) {
+      const t = trail[i];
+      const alpha = (i / trail.length) * 0.6;
+      ctx.strokeStyle = `rgba(78, 205, 196, ${alpha})`;
+      ctx.lineWidth = (i / trail.length) * 4 * SCALE;
+      ctx.beginPath();
+      ctx.moveTo(trail[i-1].x, trail[i-1].y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -1030,7 +1069,7 @@ function drawUI() {
     const pct = Math.min(trampolineHoldTime / 1.2 * 100, 100).toFixed(0);
     ctx.fillText(`蓄力中... ${pct}%`, W / 2, H - 20 * s);
   } else if (state === 'aiming') {
-    ctx.fillText('點住小龍 → 拖出方向 → 放開射出', W / 2, H - 20 * s);
+    ctx.fillText('任意處按住拖出方向 → 放開射出黏黏手', W / 2, H - 20 * s);
   } else if (state === 'stuck') {
     const remain = Math.max(0, 2.0 - swingHoldTime).toFixed(1);
     if (fingerDown) {
