@@ -54,7 +54,7 @@ window.addEventListener('resize', resize);
 
 // --- Constants ---
 const GRAVITY = 980;
-const TRAMPOLINE_BOUNCE = 650;
+const TRAMPOLINE_BOUNCE = 420;
 const STICKY_SPEED = 600;
 const SWING_BUILDUP = 2.5; // how fast swing amplitude grows
 const SWING_MAX_ANGLE = 1.2; // max swing angle in radians
@@ -707,8 +707,8 @@ function onUp(e) {
     trampolinePressed = false;
     // Launch dragon — slower so player has more time to aim
     const power = Math.min(trampolineHoldTime / 1.2, 1); // 0-1 over ~1.2s
-    dragonVX = 20 * SCALE;
-    dragonVY = -(TRAMPOLINE_BOUNCE + power * 200) * SCALE;
+    dragonVX = 15 * SCALE;
+    dragonVY = -(TRAMPOLINE_BOUNCE + power * 150) * SCALE;
     state = 'aiming';
     addParticles(dragonX, dragonY + 10 * SCALE, '#aaf', 8);
     return;
